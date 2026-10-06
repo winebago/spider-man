@@ -2,7 +2,7 @@ const express = require('express');
 const { chromium } = require('playwright');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 let browser;
 
@@ -14,7 +14,7 @@ let browser;
 app.get('/', (req, res) => {
 
     res.type('text/plain').send(
-        'Browser HTML Service is running.\n\n' +
+        'Spider-Man is running.\n\n' +
         'Usage: /load?url=https://example.com'
     );
 
@@ -38,7 +38,11 @@ app.get('/load', async (req, res) => {
 
     }
 
-    // Povolit pouze HTTP/HTTPS
+
+    // --------------------------------------------------------
+    // Validate URL
+    // --------------------------------------------------------
+
     let parsedUrl;
 
     try {
@@ -58,13 +62,22 @@ app.get('/load', async (req, res) => {
 
     }
 
+
     console.log('');
     console.log('==========================================');
     console.log('LOAD START');
     console.log('URL:', targetUrl);
     console.log('==========================================');
 
-    const context = await browser.newContext();
+
+    // Každý request dostane vlastní čistý browser context.
+    const context = await browser.newContext({
+        viewport: {
+            width: 1920,
+            height: 1080
+        }
+    });
+
 
     try {
 
@@ -79,7 +92,7 @@ app.get('/load', async (req, res) => {
 
         console.log('DOM loaded.');
 
-        // Dáme JS aplikacím chvíli na vykreslení obsahu.
+        // Dáme JavaScriptu čas dokončit vykreslení stránky.
         await page.waitForTimeout(3000);
 
         console.log('Getting final HTML...');
@@ -97,9 +110,12 @@ app.get('/load', async (req, res) => {
 
         console.error('LOAD ERROR:', error);
 
-        res.status(500).send(
-            'Failed to load page: ' + error.message
-        );
+        res.status(500)
+            .type('text/plain')
+            .send(
+                'Failed to load page: ' +
+                error.message
+            );
 
     } finally {
 
@@ -121,18 +137,29 @@ app.get('/load', async (req, res) => {
 
     try {
 
-        console.log('Starting Chromium...');
+        console.log('Starting Spider-Man...');
+        console.log('DISPLAY:', process.env.DISPLAY);
 
         browser = await chromium.launch({
-            headless: false
+
+            // DULEZITE:
+            // Chromium běží jako HEADed browser.
+            // Obrazovku mu poskytuje Xvfb z Dockerfile.
+            headless: false,
+
+            args: [
+                '--no-sandbox',
+                '--disable-dev-shm-usage'
+            ]
+
         });
 
-        console.log('Chromium started.');
+        console.log('Chromium started in headed mode.');
 
         app.listen(PORT, '0.0.0.0', () => {
 
             console.log(
-                `Browser HTML Service listening on port ${PORT}`
+                `Spider-Man listening on port ${PORT}`
             );
 
         });
