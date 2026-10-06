@@ -124,7 +124,7 @@ app.get('/load', async (req, res) => {
         console.log('Starting Chromium...');
 
         browser = await chromium.launch({
-            headless: true
+            headless: false
         });
 
         console.log('Chromium started.');
