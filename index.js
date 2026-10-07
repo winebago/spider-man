@@ -4,6 +4,18 @@ const { chromium } = require('playwright');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+
+// ============================================================
+// PROXY
+// ============================================================
+
+// Pro testování různých proxy stačí měnit pouze tyto 3 hodnoty.
+
+const PROXY_SERVER = 'http://zproxy.lum-superproxy.io:44445';
+const PROXY_USERNAME = 'lum-customer-filmtoro-zone-static-country-cz';
+const PROXY_PASSWORD = '634fp4splyim';
+
+
 let browser;
 
 
@@ -139,13 +151,20 @@ app.get('/load', async (req, res) => {
 
         console.log('Starting Spider-Man...');
         console.log('DISPLAY:', process.env.DISPLAY);
+        console.log('Proxy:', PROXY_SERVER);
 
         browser = await chromium.launch({
 
-            // DULEZITE:
             // Chromium běží jako HEADed browser.
             // Obrazovku mu poskytuje Xvfb z Dockerfile.
             headless: false,
+
+            // Proxy
+            proxy: {
+                server: PROXY_SERVER,
+                username: PROXY_USERNAME,
+                password: PROXY_PASSWORD
+            },
 
             args: [
                 '--no-sandbox',
