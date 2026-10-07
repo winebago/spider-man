@@ -227,7 +227,7 @@ app.get('/load', async (req, res) => {
 
 // ----------------------------------------------------
 
-if (debug) {
+if (req.query.debug === '1') {
 
     const browserInfo = await page.evaluate(() => ({
 
