@@ -221,23 +221,97 @@ app.get('/load', async (req, res) => {
 
         const page = await context.newPage();
 
-        console.log('Opening page...');
+// ----------------------------------------------------
 
+// COOKIES BEFORE GOTO
 
-        await page.goto(targetUrl, {
+// ----------------------------------------------------
 
-            waitUntil: 'domcontentloaded',
+const cookiesBefore = await context.cookies(targetUrl);
 
-            timeout: 30000
+console.log('COOKIES BEFORE GOTO:');
 
-        });
+if (cookiesBefore.length === 0) {
 
+    console.log('NONE');
 
-        console.log('DOM loaded.');
+} else {
 
+    for (const cookie of cookiesBefore) {
 
-        // Dáme JavaScriptu čas dokončit vykreslení.
-        await page.waitForTimeout(3000);
+        console.log(
+
+            cookie.name,
+
+            '=',
+
+            cookie.value,
+
+            '| domain:',
+
+            cookie.domain,
+
+            '| path:',
+
+            cookie.path
+
+        );
+
+    }
+
+}
+
+console.log('Opening page...');
+
+await page.goto(targetUrl, {
+
+    waitUntil: 'domcontentloaded',
+
+    timeout: 30000
+
+});
+
+console.log('DOM loaded.');
+
+// ----------------------------------------------------
+
+// COOKIES AFTER GOTO
+
+// ----------------------------------------------------
+
+const cookiesAfter = await context.cookies(targetUrl);
+
+console.log('COOKIES AFTER GOTO:');
+
+if (cookiesAfter.length === 0) {
+
+    console.log('NONE');
+
+} else {
+
+    for (const cookie of cookiesAfter) {
+
+        console.log(
+
+            cookie.name,
+
+            '=',
+
+            cookie.value,
+
+            '| domain:',
+
+            cookie.domain,
+
+            '| path:',
+
+            cookie.path
+
+        );
+
+    }
+
+}
 
 
         // ----------------------------------------------------
