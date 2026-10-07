@@ -221,6 +221,82 @@ app.get('/load', async (req, res) => {
 
         const page = await context.newPage();
 
+        // ----------------------------------------------------
+
+// DEBUG BROWSER
+
+// ----------------------------------------------------
+
+if (debug) {
+
+    const browserInfo = await page.evaluate(() => ({
+
+        userAgent: navigator.userAgent,
+
+        webdriver: navigator.webdriver,
+
+        platform: navigator.platform,
+
+        language: navigator.language,
+
+        languages: navigator.languages,
+
+        hardwareConcurrency: navigator.hardwareConcurrency,
+
+        deviceMemory: navigator.deviceMemory || null,
+
+        screen: {
+
+            width: screen.width,
+
+            height: screen.height,
+
+            availWidth: screen.availWidth,
+
+            availHeight: screen.availHeight,
+
+            colorDepth: screen.colorDepth,
+
+            pixelDepth: screen.pixelDepth
+
+        },
+
+        timezone:
+
+            Intl.DateTimeFormat().resolvedOptions().timeZone
+
+    }));
+
+    console.log('');
+
+    console.log('BROWSER DEBUG');
+
+    console.log('------------------------------------------');
+
+    console.log('User-Agent:', browserInfo.userAgent);
+
+    console.log('WebDriver:', browserInfo.webdriver);
+
+    console.log('Platform:', browserInfo.platform);
+
+    console.log('Language:', browserInfo.language);
+
+    console.log('Languages:', browserInfo.languages);
+
+    console.log('CPU:', browserInfo.hardwareConcurrency);
+
+    console.log('Memory:', browserInfo.deviceMemory);
+
+    console.log('Screen:', browserInfo.screen);
+
+    console.log('Timezone:', browserInfo.timezone);
+
+    console.log('------------------------------------------');
+
+    console.log('');
+
+}
+
 // ----------------------------------------------------
 
 // COOKIES BEFORE GOTO
