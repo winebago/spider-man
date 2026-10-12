@@ -79,17 +79,17 @@ function safeHeaders(headers, reveal = false) {
     return result;
 }
 
-function safeBody(value, maxChars = 4000, reveal = false) {
+function safeBody(value, maxChars = 4000, reveal = false, full = false) {
     if (!value) return null;
     let text = String(value);
     // JSON: redact nested properties with sensitive names.
     try {
         const obj = JSON.parse(text);
         const clean = (item, depth = 0) => {
-            if (depth > 15) return '[DEPTH LIMIT]';
-            if (Array.isArray(item)) return item.slice(0, 50).map(v => clean(v, depth + 1));
+            if (depth > (full ? 80 : 15)) return '[DEPTH LIMIT]';
+            if (Array.isArray(item)) return (full ? item : item.slice(0, 50)).map(v => clean(v, depth + 1));
             if (item && typeof item === 'object') {
-                return Object.fromEntries(Object.entries(item).slice(0, 100).map(
+                return Object.fromEntries( (full ? Object.entries(item) : Object.entries(item).slice(0, 100)).map(
                     ([k, v]) => [k, !reveal && SECRET_KEY.test(k) ? '[REDACTED]' : clean(v, depth + 1)]
                 ));
             }
@@ -119,6 +119,8 @@ app.get('/', (req, res) => {
         '&cookie=1\n' +
         '&network=1&xhr=1&wait=8000\n' +
         '&scroll=1&scrollsteps=12&scrolldelay=800\n' +
+        '&graphql=1 (only ViX GraphQL calls)\n' +
+        '&graphqlmaxbody=5000000 (max 10000000 chars per GraphQL body)\n' +
         '&showtokens=1 (requires NETWORK_DEBUG_KEY and X-Network-Debug-Key header)' 
     );
 
@@ -139,6 +141,8 @@ app.get('/load', async (req, res) => {
     const cookieNumber = req.query.cookie;
     const networkMode = req.query.network === '1';
     const xhrOnly = req.query.xhr === '1';
+    const graphqlOnly = req.query.graphql === '1';
+    const graphqlMaxBody = Math.min(Math.max(parseInt(req.query.graphqlmaxbody, 10) || 5000000, 10000), 10000000);
     const revealRequested = req.query.showtokens === '1';
     const revealTokens = revealRequested && Boolean(process.env.NETWORK_DEBUG_KEY) &&
         req.get('X-Network-Debug-Key') === process.env.NETWORK_DEBUG_KEY;
@@ -292,7 +296,8 @@ app.get('/load', async (req, res) => {
 
         // Register listeners BEFORE navigation so early XHR/fetch calls are captured.
         if (networkMode) {
-            const include = request => !xhrOnly || ['xhr', 'fetch'].includes(request.resourceType());
+            const include = request => (!xhrOnly || ['xhr', 'fetch'].includes(request.resourceType())) &&
+                (!graphqlOnly || request.url().includes('client-api.vix.com/gql/v2'));
 
             page.on('request', request => {
                 if (!include(request) || entries.length >= maxEntries) return;
@@ -305,7 +310,7 @@ app.get('/load', async (req, res) => {
                     status: null,
                     durationMs: null,
                     requestHeaders: safeHeaders(request.headers(), revealTokens),
-                    requestBody: safeBody(request.postData(), 10000, revealTokens),
+                    requestBody: safeBody(request.postData(), request.url().includes('client-api.vix.com/gql/v2') ? graphqlMaxBody : 10000, revealTokens, request.url().includes('client-api.vix.com/gql/v2')),
                     responseHeaders: null,
                     responseBody: null,
                     error: null
@@ -325,7 +330,8 @@ app.get('/load', async (req, res) => {
                 try {
                     const contentType = (response.headers()['content-type'] || '').toLowerCase();
                     if (contentType.includes('json') || contentType.includes('text/plain')) {
-                        entry.responseBody = safeBody(await response.text(), 10000, revealTokens);
+                        const isGraphql = response.url().includes('client-api.vix.com/gql/v2');
+                        entry.responseBody = safeBody(await response.text(), isGraphql ? graphqlMaxBody : 10000, revealTokens, isGraphql);
                     } else {
                         entry.responseBody = '[NON-JSON BODY OMITTED]';
                     }
@@ -505,7 +511,8 @@ if (networkMode) {
         scrolled: scrollEnabled,
         scrollSteps: scrollEnabled ? scrollSteps : 0,
         tokensVisible: revealTokens,
-        filter: xhrOnly ? 'xhr/fetch' : 'all',
+        filter: graphqlOnly ? 'ViX GraphQL' : (xhrOnly ? 'xhr/fetch' : 'all'),
+        graphqlMaxBody,
         waitMs,
         count: entries.length,
         truncated: entries.length >= maxEntries,
