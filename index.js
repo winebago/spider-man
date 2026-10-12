@@ -121,7 +121,7 @@ app.get('/', (req, res) => {
         '&scroll=1&scrollsteps=12&scrolldelay=800\n' +
         '&graphql=1 (only ViX GraphQL calls)\n' +
         '&graphqlmaxbody=5000000 (max 10000000 chars per GraphQL body)\n' +
-        '&showtokens=1 (requires NETWORK_DEBUG_KEY and X-Network-Debug-Key header)' 
+        '&showtokens=1 (unredacted tokens in network JSON; WARNING: public endpoint)' 
     );
 
 });
@@ -143,12 +143,7 @@ app.get('/load', async (req, res) => {
     const xhrOnly = req.query.xhr === '1';
     const graphqlOnly = req.query.graphql === '1';
     const graphqlMaxBody = Math.min(Math.max(parseInt(req.query.graphqlmaxbody, 10) || 5000000, 10000), 10000000);
-    const revealRequested = req.query.showtokens === '1';
-    const revealTokens = revealRequested && Boolean(process.env.NETWORK_DEBUG_KEY) &&
-        req.get('X-Network-Debug-Key') === process.env.NETWORK_DEBUG_KEY;
-    if (revealRequested && !revealTokens) {
-        return res.status(403).type('text/plain').send('showtokens requires NETWORK_DEBUG_KEY and matching X-Network-Debug-Key header.');
-    }
+    const revealTokens = req.query.showtokens === '1';
     const scrollEnabled = req.query.scroll === '1';
     const scrollSteps = Math.min(Math.max(parseInt(req.query.scrollsteps, 10) || 12, 1), 35);
     const scrollDelay = Math.min(Math.max(parseInt(req.query.scrolldelay, 10) || 800, 250), 3000);
