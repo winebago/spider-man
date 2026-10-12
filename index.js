@@ -60,26 +60,26 @@ function getProxy(number, country) {
 
 const SECRET_KEY = /authorization|cookie|token|secret|api[-_]?key|session|jwt|password|signature|credential|auth|client[-_]?secret/i;
 
-function safeUrl(raw) {
+function safeUrl(raw, reveal = false) {
     try {
         const u = new URL(raw);
         for (const key of u.searchParams.keys()) {
-            if (SECRET_KEY.test(key)) u.searchParams.set(key, '[REDACTED]');
+            if (!reveal && SECRET_KEY.test(key)) u.searchParams.set(key, '[REDACTED]');
         }
         return u.toString();
     } catch { return '[INVALID URL]'; }
 }
 
-function safeHeaders(headers) {
+function safeHeaders(headers, reveal = false) {
     const result = {};
     for (const [key, value] of Object.entries(headers || {})) {
-        result[key] = SECRET_KEY.test(key) || key.toLowerCase() === 'set-cookie'
+        result[key] = !reveal && (SECRET_KEY.test(key) || key.toLowerCase() === 'set-cookie')
             ? '[REDACTED]' : value;
     }
     return result;
 }
 
-function safeBody(value, maxChars = 4000) {
+function safeBody(value, maxChars = 4000, reveal = false) {
     if (!value) return null;
     let text = String(value);
     // JSON: redact nested properties with sensitive names.
@@ -90,7 +90,7 @@ function safeBody(value, maxChars = 4000) {
             if (Array.isArray(item)) return item.slice(0, 50).map(v => clean(v, depth + 1));
             if (item && typeof item === 'object') {
                 return Object.fromEntries(Object.entries(item).slice(0, 100).map(
-                    ([k, v]) => [k, SECRET_KEY.test(k) ? '[REDACTED]' : clean(v, depth + 1)]
+                    ([k, v]) => [k, !reveal && SECRET_KEY.test(k) ? '[REDACTED]' : clean(v, depth + 1)]
                 ));
             }
             return item;
@@ -117,7 +117,9 @@ app.get('/', (req, res) => {
         '&proxy=1\n' +
         '&country=cz\n' +
         '&cookie=1\n' +
-        '&network=1&xhr=1&wait=8000'
+        '&network=1&xhr=1&wait=8000\n' +
+        '&scroll=1&scrollsteps=12&scrolldelay=800\n' +
+        '&showtokens=1 (requires NETWORK_DEBUG_KEY and X-Network-Debug-Key header)' 
     );
 
 });
@@ -137,6 +139,15 @@ app.get('/load', async (req, res) => {
     const cookieNumber = req.query.cookie;
     const networkMode = req.query.network === '1';
     const xhrOnly = req.query.xhr === '1';
+    const revealRequested = req.query.showtokens === '1';
+    const revealTokens = revealRequested && Boolean(process.env.NETWORK_DEBUG_KEY) &&
+        req.get('X-Network-Debug-Key') === process.env.NETWORK_DEBUG_KEY;
+    if (revealRequested && !revealTokens) {
+        return res.status(403).type('text/plain').send('showtokens requires NETWORK_DEBUG_KEY and matching X-Network-Debug-Key header.');
+    }
+    const scrollEnabled = req.query.scroll === '1';
+    const scrollSteps = Math.min(Math.max(parseInt(req.query.scrollsteps, 10) || 12, 1), 35);
+    const scrollDelay = Math.min(Math.max(parseInt(req.query.scrolldelay, 10) || 800, 250), 3000);
     const waitMs = networkMode ? Math.min(Math.max(Number(req.query.wait) || 8000, 0), 20000) : 0;
     const entries = [];
     const tracked = new Map();
@@ -289,12 +300,12 @@ app.get('/load', async (req, res) => {
                     id: entries.length + 1,
                     type: request.resourceType(),
                     method: request.method(),
-                    url: safeUrl(request.url()),
+                    url: safeUrl(request.url(), revealTokens),
                     startedMs: Date.now() - startedAt,
                     status: null,
                     durationMs: null,
-                    requestHeaders: safeHeaders(request.headers()),
-                    requestBody: safeBody(request.postData()),
+                    requestHeaders: safeHeaders(request.headers(), revealTokens),
+                    requestBody: safeBody(request.postData(), 10000, revealTokens),
                     responseHeaders: null,
                     responseBody: null,
                     error: null
@@ -309,12 +320,12 @@ app.get('/load', async (req, res) => {
                 const { entry, started } = item;
                 entry.status = response.status();
                 entry.durationMs = Date.now() - started;
-                try { entry.responseHeaders = safeHeaders(await response.allHeaders()); }
+                try { entry.responseHeaders = safeHeaders(await response.allHeaders(), revealTokens); }
                 catch (e) { entry.headersError = e.message; }
                 try {
                     const contentType = (response.headers()['content-type'] || '').toLowerCase();
-                    if (contentType.includes('json')) {
-                        entry.responseBody = safeBody(await response.text());
+                    if (contentType.includes('json') || contentType.includes('text/plain')) {
+                        entry.responseBody = safeBody(await response.text(), 10000, revealTokens);
                     } else {
                         entry.responseBody = '[NON-JSON BODY OMITTED]';
                     }
@@ -465,6 +476,17 @@ await page.goto(targetUrl, {
 
 console.log('DOM loaded.');
 
+if (scrollEnabled) {
+    console.log('Scrolling page:', scrollSteps, 'steps');
+    for (let step = 0; step < scrollSteps; step++) {
+        await page.evaluate(() => window.scrollBy(0, Math.max(650, window.innerHeight * 0.85)));
+        await page.waitForTimeout(scrollDelay);
+    }
+    // Trigger carousels that load only when close to the bottom.
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(scrollDelay);
+}
+
 if (networkMode) {
     console.log('Capturing network for', waitMs, 'ms...');
     await page.waitForTimeout(waitMs);
@@ -479,7 +501,10 @@ if (networkMode) {
         page.waitForTimeout(500)
     ]);
     return res.status(200).json({
-        url: safeUrl(targetUrl),
+        url: safeUrl(targetUrl, revealTokens),
+        scrolled: scrollEnabled,
+        scrollSteps: scrollEnabled ? scrollSteps : 0,
+        tokensVisible: revealTokens,
         filter: xhrOnly ? 'xhr/fetch' : 'all',
         waitMs,
         count: entries.length,
