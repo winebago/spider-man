@@ -55,6 +55,55 @@ function getProxy(number, country) {
 
 
 // ============================================================
+// NETWORK INSPECTOR HELPERS
+// ============================================================
+
+const SECRET_KEY = /authorization|cookie|token|secret|api[-_]?key|session|jwt|password|signature|credential|auth|client[-_]?secret/i;
+
+function safeUrl(raw) {
+    try {
+        const u = new URL(raw);
+        for (const key of u.searchParams.keys()) {
+            if (SECRET_KEY.test(key)) u.searchParams.set(key, '[REDACTED]');
+        }
+        return u.toString();
+    } catch { return '[INVALID URL]'; }
+}
+
+function safeHeaders(headers) {
+    const result = {};
+    for (const [key, value] of Object.entries(headers || {})) {
+        result[key] = SECRET_KEY.test(key) || key.toLowerCase() === 'set-cookie'
+            ? '[REDACTED]' : value;
+    }
+    return result;
+}
+
+function safeBody(value, maxChars = 4000) {
+    if (!value) return null;
+    let text = String(value);
+    // JSON: redact nested properties with sensitive names.
+    try {
+        const obj = JSON.parse(text);
+        const clean = (item, depth = 0) => {
+            if (depth > 15) return '[DEPTH LIMIT]';
+            if (Array.isArray(item)) return item.slice(0, 50).map(v => clean(v, depth + 1));
+            if (item && typeof item === 'object') {
+                return Object.fromEntries(Object.entries(item).slice(0, 100).map(
+                    ([k, v]) => [k, SECRET_KEY.test(k) ? '[REDACTED]' : clean(v, depth + 1)]
+                ));
+            }
+            return item;
+        };
+        text = JSON.stringify(clean(obj));
+    } catch {
+        // Non-JSON bodies may contain credentials: do not expose them.
+        return '[NON-JSON BODY OMITTED]';
+    }
+    return text.length > maxChars ? text.slice(0, maxChars) + '...[TRUNCATED]' : text;
+}
+
+// ============================================================
 // HEALTH CHECK
 // ============================================================
 
@@ -67,7 +116,8 @@ app.get('/', (req, res) => {
         'Options:\n' +
         '&proxy=1\n' +
         '&country=cz\n' +
-        '&cookie=1'
+        '&cookie=1\n' +
+        '&network=1&xhr=1&wait=8000'
     );
 
 });
@@ -85,6 +135,13 @@ app.get('/load', async (req, res) => {
     const proxyCountry = req.query.country || 'cz';
 
     const cookieNumber = req.query.cookie;
+    const networkMode = req.query.network === '1';
+    const xhrOnly = req.query.xhr === '1';
+    const waitMs = networkMode ? Math.min(Math.max(Number(req.query.wait) || 8000, 0), 20000) : 0;
+    const entries = [];
+    const tracked = new Map();
+    const startedAt = Date.now();
+    const maxEntries = 300;
 
 
     // --------------------------------------------------------
@@ -172,6 +229,7 @@ app.get('/load', async (req, res) => {
     console.log('Proxy:', proxyNumber || 'NONE');
     console.log('Country:', proxyCountry);
     console.log('Cookie:', cookieNumber || 'NONE');
+    console.log('Network:', networkMode ? 'ON' : 'OFF');
     console.log('==========================================');
 
 
@@ -220,6 +278,64 @@ app.get('/load', async (req, res) => {
         // ----------------------------------------------------
 
         const page = await context.newPage();
+
+        // Register listeners BEFORE navigation so early XHR/fetch calls are captured.
+        if (networkMode) {
+            const include = request => !xhrOnly || ['xhr', 'fetch'].includes(request.resourceType());
+
+            page.on('request', request => {
+                if (!include(request) || entries.length >= maxEntries) return;
+                const entry = {
+                    id: entries.length + 1,
+                    type: request.resourceType(),
+                    method: request.method(),
+                    url: safeUrl(request.url()),
+                    startedMs: Date.now() - startedAt,
+                    status: null,
+                    durationMs: null,
+                    requestHeaders: safeHeaders(request.headers()),
+                    requestBody: safeBody(request.postData()),
+                    responseHeaders: null,
+                    responseBody: null,
+                    error: null
+                };
+                entries.push(entry);
+                tracked.set(request, { entry, started: Date.now() });
+            });
+
+            page.on('response', async response => {
+                const item = tracked.get(response.request());
+                if (!item) return;
+                const { entry, started } = item;
+                entry.status = response.status();
+                entry.durationMs = Date.now() - started;
+                try { entry.responseHeaders = safeHeaders(await response.allHeaders()); }
+                catch (e) { entry.headersError = e.message; }
+                try {
+                    const contentType = (response.headers()['content-type'] || '').toLowerCase();
+                    if (contentType.includes('json')) {
+                        entry.responseBody = safeBody(await response.text());
+                    } else {
+                        entry.responseBody = '[NON-JSON BODY OMITTED]';
+                    }
+                } catch (e) {
+                    entry.responseBody = '[UNAVAILABLE: ' + e.message + ']';
+                }
+            });
+
+            page.on('requestfailed', request => {
+                const item = tracked.get(request);
+                if (!item) return;
+                item.entry.durationMs = Date.now() - item.started;
+                item.entry.error = request.failure()?.errorText || 'Request failed';
+            });
+
+            page.on('requestfinished', request => {
+                const item = tracked.get(request);
+                if (!item) return;
+                item.entry.durationMs = Date.now() - item.started;
+            });
+        }
 
         // ----------------------------------------------------
 
@@ -321,7 +437,7 @@ if (cookiesBefore.length === 0) {
 
             '=',
 
-            cookie.value,
+            networkMode ? '[REDACTED]' : cookie.value,
 
             '| domain:',
 
@@ -349,6 +465,30 @@ await page.goto(targetUrl, {
 
 console.log('DOM loaded.');
 
+if (networkMode) {
+    console.log('Capturing network for', waitMs, 'ms...');
+    await page.waitForTimeout(waitMs);
+    // Give pending response-body handlers a moment to complete.
+    await Promise.race([
+        Promise.allSettled([...tracked.keys()].map(async request => {
+            const item = tracked.get(request);
+            if (item?.entry.status !== null && item?.entry.responseBody === null) {
+                await page.waitForTimeout(250);
+            }
+        })),
+        page.waitForTimeout(500)
+    ]);
+    return res.status(200).json({
+        url: safeUrl(targetUrl),
+        filter: xhrOnly ? 'xhr/fetch' : 'all',
+        waitMs,
+        count: entries.length,
+        truncated: entries.length >= maxEntries,
+        entries
+    });
+}
+
+
 // ----------------------------------------------------
 
 // COOKIES AFTER GOTO
@@ -373,7 +513,7 @@ if (cookiesAfter.length === 0) {
 
             '=',
 
-            cookie.value,
+            networkMode ? '[REDACTED]' : cookie.value,
 
             '| domain:',
 
@@ -427,9 +567,8 @@ if (cookiesAfter.length === 0) {
     } finally {
 
 
-        if (!context._closed) {
-            await context.close();
-        }
+        try { await context.close(); }
+        catch (closeError) { console.error('Context close error:', closeError.message); }
 
 
         console.log(
